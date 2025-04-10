@@ -153,4 +153,4 @@ toml = "0.8.20"
 unescaper = "0.1.5"
 xshell = "0.2.7"
 
-openssl = { version = "0.10.71" }
+openssl = { version = "0.10.72" }
