@@ -148,7 +148,7 @@ time = { version = "0.3.37", features = [
     "macros",
     "local-offset",
 ] }
-tokio = { version = "1.43.0", features = ["full", "sync"] }
+tokio = { version = "1.44.2", features = ["full", "sync"] }
 toml = "0.8.20"
 unescaper = "0.1.5"
 xshell = "0.2.7"
