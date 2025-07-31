@@ -164,4 +164,4 @@ vector-map = { version = "1.0.2", features = ["serde_impl"] }
 xshell = "0.2.7"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
-openssl = { version = "0.10.71" }
+openssl = { version = "0.10.72" }
