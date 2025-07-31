@@ -1,7 +1,7 @@
 use cairo_lang_debug::DebugWithDb;
 use cairo_lang_defs::diagnostic_utils::StableLocation;
 use cairo_lang_defs::ids::NamedLanguageElementId;
-use cairo_lang_diagnostics::Maybe;
+use cairo_lang_diagnostics::{DiagnosticAdded, Maybe};
 use cairo_lang_filesystem::flag::Flag;
 use cairo_lang_filesystem::ids::{FlagId, FlagLongId};
 use cairo_lang_semantic::{
@@ -60,32 +60,32 @@ struct ExtractedEnumDetails<'db> {
 /// and expression evaluation across different match-like constructs.
 pub enum MatchArmWrapper<'db, 'a> {
     /// A match arm. Patterns (non-empty) guard the expression to evaluate.
-    Arm(&'a [PatternId<'db>], semantic::ExprId<'db>),
+    Arm(&'a [PatternId], semantic::ExprId),
     /// Else clause (no patterns) and it's expression to evaluate (if-let).
-    ElseClause(semantic::ExprId<'db>),
+    ElseClause(semantic::ExprId),
     /// Default clause when else clause is not provided (if-let/while-let).
     DefaultClause,
     /// The success arm of a let-else statement. See [super::lower_let_else::lower_let_else] for
     /// more details.
     LetElseSuccess(
-        &'a [PatternId<'db>],
+        &'a [PatternId],
         Vec<(VarId<'db>, SyntaxStablePtrId<'db>)>,
         SyntaxStablePtrId<'db>,
     ),
     /// Similar to [Self::Arm], except that the expression is a conditioned expression
     /// (see [ConditionedExpr]).
-    ConditionedArm(&'a [PatternId<'db>], ConditionedExpr<'db, 'a>),
+    ConditionedArm(&'a [PatternId], ConditionedExpr<'a>),
 }
 
-impl<'db, 'a> From<&'a semantic::MatchArm<'db>> for MatchArmWrapper<'db, 'a> {
-    fn from(arm: &'a semantic::MatchArm<'db>) -> Self {
+impl<'db, 'a> From<&'a semantic::MatchArm> for MatchArmWrapper<'db, 'a> {
+    fn from(arm: &'a semantic::MatchArm) -> Self {
         MatchArmWrapper::Arm(&arm.patterns, arm.expression)
     }
 }
 
 impl<'db> MatchArmWrapper<'db, '_> {
     /// Returns the patterns of the match arm.
-    pub fn patterns(&self) -> Option<&[PatternId<'db>]> {
+    pub fn patterns(&self) -> Option<&[PatternId]> {
         match self {
             MatchArmWrapper::Arm(patterns, _)
             | MatchArmWrapper::ConditionedArm(patterns, _)
@@ -293,11 +293,11 @@ enum VariantMatchTree<'db> {
         /// The path to the arm and its pattern that covers this enum type/variant.
         pattern_path: PatternPath,
         /// The inner pattern after unwrapping all enum variants.
-        inner_pattern: Option<PatternId<'db>>,
+        inner_pattern: Option<PatternId>,
     },
     /// No pattern has covered this enum type/variant. A `MissingMatchArm` diagnostic
     /// has been emitted and the error saved.
-    Missing(LoweringFlowError<'db>),
+    Missing(DiagnosticAdded),
 }
 
 impl<'db> std::fmt::Debug for VariantMatchTree<'db> {
@@ -369,7 +369,7 @@ enum PatternTree<'db> {
         /// The path to the arm and its pattern that covers this enum type/variant.
         pattern_path: PatternPath,
         /// The inner pattern after unwrapping all enum variants.
-        inner_pattern: Option<PatternId<'db>>,
+        inner_pattern: Option<PatternId>,
     },
     /// No pattern has covered this enum type/variant yet.
     Empty,
@@ -381,7 +381,7 @@ impl<'db> PatternTree<'db> {
         &mut self,
         match_type: MatchKind<'db>,
         pattern_path: PatternPath,
-        inner_pattern: Option<PatternId<'db>>,
+        inner_pattern: Option<PatternId>,
     ) -> Result<(), LoweringDiagnosticKind<'db>> {
         match self {
             PatternTree::Empty => {
@@ -533,7 +533,7 @@ struct MatchingPath<'db> {
 /// each variants list it can match.
 fn insert_tuple_path_patterns<'db>(
     ctx: &mut LoweringContext<'db, '_>,
-    patterns: &[PatternId<'db>],
+    patterns: &[PatternId],
     pattern_path: &PatternPath,
     extracted_enums_details: &[ExtractedEnumDetails<'db>],
     mut path: MatchingPath<'db>,
@@ -676,7 +676,7 @@ struct LoweringMatchTupleContext<'db> {
     /// The current variants path.
     current_path: MatchingPath<'db>,
     /// The current variants' variable ids.
-    current_var_ids: Vec<VariableId<'db>>,
+    current_var_ids: Vec<VariableId>,
 }
 
 /// Lowers the arm of a match on a tuple expression.
@@ -708,7 +708,8 @@ fn lower_tuple_match_arm<'db>(
                 match_type,
                 variants_string,
             )
-        })?;
+        })
+        .map_err(LoweringFlowError::Failed)?;
     let pattern = pattern_path.pattern_index.map(|i| {
         arms[pattern_path.arm_index]
             .pattern(ctx, i)
@@ -861,7 +862,7 @@ pub(crate) fn lower_expr_match_tuple<'db>(
     ctx: &mut LoweringContext<'db, '_>,
     builder: &mut BlockBuilder<'db>,
     expr: LoweredExpr<'db>,
-    matched_expr: semantic::ExprId<'db>,
+    matched_expr: semantic::ExprId,
     tuple_info: &TupleInfo<'db>,
     arms: &[MatchArmWrapper<'db, '_>],
     match_type: MatchKind<'db>,
@@ -983,7 +984,7 @@ pub(crate) fn lower_expr_match<'db>(
 pub(crate) fn lower_match_arms<'db>(
     ctx: &mut LoweringContext<'db, '_>,
     builder: &mut BlockBuilder<'db>,
-    matched_expr: semantic::ExprId<'db>,
+    matched_expr: semantic::ExprId,
     lowered_expr: LoweredExpr<'db>,
     arms: Vec<MatchArmWrapper<'db, '_>>,
     location: LocationId<'db>,
@@ -1020,7 +1021,7 @@ pub(crate) fn lower_match_arms<'db>(
 pub(crate) fn lower_concrete_enum_match<'db>(
     ctx: &mut LoweringContext<'db, '_>,
     builder: &mut BlockBuilder<'db>,
-    matched_expr: semantic::ExprId<'db>,
+    matched_expr: semantic::ExprId,
     lowered_matched_expr: LoweredExpr<'db>,
     arms: &[MatchArmWrapper<'db, '_>],
     location: LocationId<'db>,
@@ -1124,8 +1125,8 @@ trait EnumVariantScopeBuilder<'db> {
         builder_context: &mut MatchArmsLoweringContext<'db, '_>,
         subscope: &mut BlockBuilder<'db>,
         ty: semantic::TypeId<'db>,
-        inner_pattern: Option<PatternId<'db>>,
-    ) -> LoweringResult<'db, Vec<VariableId<'db>>>;
+        inner_pattern: Option<PatternId>,
+    ) -> LoweringResult<'db, Vec<VariableId>>;
 
     /// Returns number of snapshots on the matched type.
     fn n_snapshots(&self) -> usize;
@@ -1229,7 +1230,7 @@ trait EnumVariantScopeBuilder<'db> {
         fn unfold_pattern_and_push_to_tree<'db>(
             ctx: &mut LoweringContext<'db, '_>,
             match_type: MatchKind<'db>,
-            mut pattern: PatternId<'db>,
+            mut pattern: PatternId,
             pattern_path: PatternPath,
             mut pattern_tree: &mut PatternTree<'db>,
             mut concrete_enum_id: semantic::ConcreteEnumId<'db>,
@@ -1333,7 +1334,7 @@ trait EnumVariantScopeBuilder<'db> {
             stable_ptr: impl Into<SyntaxStablePtrId<'db>>,
             pattern_path: PatternPath,
             pattern_tree: &mut PatternTree<'db>,
-            inner_pattern: Option<PatternId<'db>>,
+            inner_pattern: Option<PatternId>,
         ) {
             let _ = pattern_tree
                 .push_pattern_path(match_type, pattern_path, inner_pattern)
@@ -1341,12 +1342,12 @@ trait EnumVariantScopeBuilder<'db> {
         }
 
         /// Checks if a pattern matches an enum variant.
-        fn matches_enum<'db>(ctx: &LoweringContext<'db, '_>, pattern: PatternId<'db>) -> bool {
+        fn matches_enum<'db>(ctx: &LoweringContext<'db, '_>, pattern: PatternId) -> bool {
             matches!(ctx.function_body.arenas.patterns[pattern], semantic::Pattern::EnumVariant(_))
         }
 
         /// Checks if a pattern matches `otherwise` or a variable.
-        fn matches_other<'db>(ctx: &LoweringContext<'db, '_>, pattern: PatternId<'db>) -> bool {
+        fn matches_other<'db>(ctx: &LoweringContext<'db, '_>, pattern: PatternId) -> bool {
             matches!(
                 ctx.function_body.arenas.patterns[pattern],
                 semantic::Pattern::Otherwise(_) | semantic::Pattern::Variable(_)
@@ -1449,7 +1450,8 @@ trait EnumVariantScopeBuilder<'db> {
             .collect::<LoweringResult<'db, Vec<_>>>()?;
 
         // Create the match info and return the result
-        let match_info = create_match_info(ctx, variant_contexts?);
+        let match_info =
+            create_match_info(ctx, variant_contexts.map_err(LoweringFlowError::Failed)?);
         builder_context.builder.merge_and_end_with_match(ctx, match_info, sealed, location)
     }
 
@@ -1473,8 +1475,7 @@ trait EnumVariantScopeBuilder<'db> {
         builder_context: &mut MatchArmsLoweringContext<'db, '_>,
         concrete_variants: Vec<ConcreteVariant<'db>>,
         variant_match_tree: &VariantMatchTree<'db>,
-    ) -> (LoweringResult<'db, Vec<MatchArm<'db>>>, OrderedHashMap<usize, Vec<MatchLeafBuilder<'db>>>)
-    {
+    ) -> (Maybe<Vec<MatchArm<'db>>>, OrderedHashMap<usize, Vec<MatchLeafBuilder<'db>>>) {
         let mut variant_contexts = Vec::new();
         let mut arm_blocks: OrderedHashMap<usize, Vec<_>> = OrderedHashMap::default();
         let mut pattern_lowering_err = None;
@@ -1547,11 +1548,9 @@ trait EnumVariantScopeBuilder<'db> {
                         Err(err) => (block_id, vec![], Err((err, variant_scope))),
                     }
                 }
-                VariantMatchTree::Missing(lowering_flow_error) => (
-                    variant_scope.block_id,
-                    vec![],
-                    Err((lowering_flow_error.clone(), variant_scope)),
-                ),
+                VariantMatchTree::Missing(diag_added) => {
+                    (variant_scope.block_id, vec![], Err((*diag_added, variant_scope)))
+                }
             };
 
             variant_contexts.push(MatchArm {
@@ -1569,9 +1568,7 @@ trait EnumVariantScopeBuilder<'db> {
                     });
                 }
                 Ok(None) => (),
-                Err((e, variant_scope)) => {
-                    // If we have an error, we need to report it and finalize the block.
-                    let _ = lowering_flow_error_to_sealed_block(ctx, variant_scope, e.clone());
+                Err((e, _variant_scope)) => {
                     pattern_lowering_err.get_or_insert(e);
                 }
             }
@@ -1594,8 +1591,8 @@ impl<'db> EnumVariantScopeBuilder<'db> for ExternEnumVariantPatternBuilder<'db> 
         _builder_context: &mut MatchArmsLoweringContext<'db, '_>,
         subscope: &mut BlockBuilder<'db>,
         ty: semantic::TypeId<'db>,
-        inner_pattern: Option<PatternId<'db>>,
-    ) -> LoweringResult<'db, Vec<VariableId<'db>>> {
+        inner_pattern: Option<PatternId>,
+    ) -> LoweringResult<'db, Vec<VariableId>> {
         let location = self.extern_enum.location;
         let input_tys = match_extern_variant_arm_input_types(ctx, ty, &self.extern_enum);
         let mut input_vars =
@@ -1630,8 +1627,8 @@ impl<'db> EnumVariantScopeBuilder<'db> for ConcreteEnumVariantPatternBuilder {
         builder_context: &mut MatchArmsLoweringContext<'db, '_>,
         subscope: &mut BlockBuilder<'db>,
         ty: semantic::TypeId<'db>,
-        inner_pattern: Option<PatternId<'db>>,
-    ) -> LoweringResult<'db, Vec<VariableId<'db>>> {
+        inner_pattern: Option<PatternId>,
+    ) -> LoweringResult<'db, Vec<VariableId>> {
         if let Some(inner_pattern) = inner_pattern {
             let pattern_location = ctx.get_location(
                 ctx.function_body.arenas.patterns[inner_pattern].stable_ptr().untyped(),
@@ -2248,14 +2245,14 @@ fn report_missing_arm_error<'db>(
     location: LocationId<'db>,
     match_type: MatchKind<'db>,
     variants_string: String,
-) -> LoweringFlowError<'db> {
-    LoweringFlowError::Failed(ctx.diagnostics.report_by_location(
+) -> DiagnosticAdded {
+    ctx.diagnostics.report_by_location(
         location.long(ctx.db).clone(),
         MatchError(MatchError {
             kind: match_type,
             error: MatchDiagnostic::MissingMatchArm(variants_string),
         }),
-    ))
+    )
 }
 
 /// Reports a missing arm error and returns a [LoweringFlowError].
@@ -2264,7 +2261,7 @@ fn report_missing_variant_error<'db>(
     location: LocationId<'db>,
     match_type: MatchKind<'db>,
     variants_used: &[ConcreteVariant<'db>],
-) -> LoweringFlowError<'db> {
+) -> DiagnosticAdded {
     let variants_string = format!(
         "{}{}",
         variants_used.iter().map(|v| v.id.name(ctx.db)).join("("),

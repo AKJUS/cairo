@@ -7,10 +7,10 @@ use super::LowerGraphContext;
 use crate::lower::block_builder::BlockBuilder;
 use crate::lower::context::{LoweredExpr, VarRequest};
 use crate::lower::flow_control::graph::{
-    ArmExpr, BooleanIf, EvaluateExpr, FlowControlNode, NodeId,
+    ArmExpr, BooleanIf, EnumMatch, EvaluateExpr, FlowControlNode, NodeId,
 };
 use crate::lower::{lower_expr_to_var_usage, lower_tail_expr, lowered_expr_to_block_scope_end};
-use crate::{MatchArm, MatchEnumInfo, MatchInfo};
+use crate::{MatchArm, MatchEnumInfo, MatchInfo, VarUsage};
 
 /// Lowers the node with the given [NodeId].
 pub fn lower_node(ctx: &mut LowerGraphContext<'_, '_, '_>, id: NodeId) -> Maybe<()> {
@@ -23,6 +23,7 @@ pub fn lower_node(ctx: &mut LowerGraphContext<'_, '_, '_>, id: NodeId) -> Maybe<
         FlowControlNode::BooleanIf(node) => lower_boolean_if(ctx, id, node, builder),
         FlowControlNode::ArmExpr(node) => lower_arm_expr(ctx, node, builder),
         FlowControlNode::UnitResult => lower_unit_result(ctx, builder),
+        FlowControlNode::EnumMatch(node) => lower_enum_match(ctx, id, node, builder),
     }
 }
 
@@ -30,7 +31,7 @@ pub fn lower_node(ctx: &mut LowerGraphContext<'_, '_, '_>, id: NodeId) -> Maybe<
 fn lower_evaluate_expr<'db>(
     ctx: &mut LowerGraphContext<'db, '_, '_>,
     id: NodeId,
-    node: &EvaluateExpr<'db>,
+    node: &EvaluateExpr,
     mut builder: BlockBuilder<'db>,
 ) -> Maybe<()> {
     let lowered_expr = lower_expr_to_var_usage(ctx.ctx, &mut builder, node.expr);
@@ -88,7 +89,7 @@ fn lower_boolean_if<'db>(
 /// Lowers an [ArmExpr] node.
 fn lower_arm_expr<'db>(
     ctx: &mut LowerGraphContext<'db, '_, '_>,
-    node: &ArmExpr<'db>,
+    node: &ArmExpr,
     builder: BlockBuilder<'db>,
 ) -> Maybe<()> {
     let sealed_block = lower_tail_expr(ctx.ctx, builder, node.expr)?;
@@ -108,5 +109,43 @@ fn lower_unit_result<'db>(
     )?;
     ctx.add_sealed_block(sealed_block);
 
+    Ok(())
+}
+
+/// Lowers an [EnumMatch] node.
+fn lower_enum_match<'db>(
+    ctx: &mut LowerGraphContext<'db, '_, '_>,
+    id: NodeId,
+    node: &EnumMatch<'db>,
+    builder: BlockBuilder<'db>,
+) -> Maybe<()> {
+    let match_location = node.matched_var.location(ctx.graph);
+
+    let arms: Vec<MatchArm<'db>> = node
+        .variants
+        .iter()
+        .map(|(concrete_variant, variant_node, flow_control_var)| {
+            let var_ty = flow_control_var.ty(ctx.graph);
+            let var_location = flow_control_var.location(ctx.graph);
+            // Create a variable for the variant inner value.
+            let variant_var = ctx.ctx.new_var(VarRequest { ty: var_ty, location: var_location });
+            let var_usage = VarUsage { var_id: variant_var, location: var_location };
+            ctx.register_var(*flow_control_var, var_usage);
+            MatchArm {
+                arm_selector: MatchArmSelector::VariantId(*concrete_variant),
+                block_id: ctx.assign_child_block_id(*variant_node, &builder),
+                var_ids: vec![variant_var],
+            }
+        })
+        .collect();
+
+    let match_info = MatchInfo::Enum(MatchEnumInfo {
+        concrete_enum_id: node.concrete_enum_id,
+        input: ctx.vars[&node.matched_var],
+        arms,
+        location: match_location,
+    });
+
+    ctx.finalize_with_match(id, builder, match_info);
     Ok(())
 }
