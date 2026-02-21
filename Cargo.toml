@@ -124,7 +124,7 @@ indent = "0.1.1"
 indexmap = { version = "2.10.0", default-features = false }
 indoc = "2.0.6"
 itertools = { version = "0.14.0", default-features = false }
-keccak = "0.1.5"
+keccak = "0.1.6"
 lalrpop-util = { version = "0.22.2", features = ["lexer"] }
 log = "0.4.27"
 mimalloc = { version = "0.1.48" }
